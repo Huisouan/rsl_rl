@@ -63,19 +63,42 @@ class RolloutStorage:
         self.step = 0
 
     def add_transitions(self, transition: Transition):
+        # 如果当前步骤数已经超过了每个环境的过渡数，则抛出异常
         if self.step >= self.num_transitions_per_env:
             raise AssertionError("Rollout buffer overflow")
+
+        # 将transition中的观测值复制到self.observations对应步骤的位置
         self.observations[self.step].copy_(transition.observations)
+
+        # 如果self.privileged_observations不为空，则将transition中的critic观测值复制到self.privileged_observations对应步骤的位置
         if self.privileged_observations is not None:
             self.privileged_observations[self.step].copy_(transition.critic_observations)
+
+        # 将transition中的动作复制到self.actions对应步骤的位置
         self.actions[self.step].copy_(transition.actions)
+
+        # 将transition中的奖励复制到self.rewards对应步骤的位置，并调整维度
         self.rewards[self.step].copy_(transition.rewards.view(-1, 1))
+
+        # 将transition中的结束状态复制到self.dones对应步骤的位置，并调整维度
         self.dones[self.step].copy_(transition.dones.view(-1, 1))
+
+        # 将transition中的值复制到self.values对应步骤的位置
         self.values[self.step].copy_(transition.values)
+
+        # 将transition中的动作对数概率复制到self.actions_log_prob对应步骤的位置，并调整维度
         self.actions_log_prob[self.step].copy_(transition.actions_log_prob.view(-1, 1))
+
+        # 将transition中的动作均值复制到self.mu对应步骤的位置
         self.mu[self.step].copy_(transition.action_mean)
+
+        # 将transition中的动作标准差复制到self.sigma对应步骤的位置
         self.sigma[self.step].copy_(transition.action_sigma)
+
+        # 保存transition中的隐藏状态
         self._save_hidden_states(transition.hidden_states)
+
+        # 增加步骤数
         self.step += 1
 
     def _save_hidden_states(self, hidden_states):
@@ -103,18 +126,29 @@ class RolloutStorage:
 
     def compute_returns(self, last_values, gamma, lam):
         advantage = 0
+        # 遍历每一步
         for step in reversed(range(self.num_transitions_per_env)):
+            # 如果当前步是最后一步
             if step == self.num_transitions_per_env - 1:
+                # 下一状态的值等于最后的状态值
                 next_values = last_values
             else:
+                # 否则，下一状态的值从values数组中获取
                 next_values = self.values[step + 1]
+            # 判断当前步是否非终止状态
             next_is_not_terminal = 1.0 - self.dones[step].float()
+            # 计算TD误差
             delta = self.rewards[step] + next_is_not_terminal * gamma * next_values - self.values[step]
+            # 更新advantage
             advantage = delta + next_is_not_terminal * gamma * lam * advantage
+            # 计算当前步的回报
             self.returns[step] = advantage + self.values[step]
 
-        # Compute and normalize the advantages
+        # 计算并标准化advantage
+        # 计算advantage
         self.advantages = self.returns - self.values
+    
+        # 对advantage进行标准化处理
         self.advantages = (self.advantages - self.advantages.mean()) / (self.advantages.std() + 1e-8)
 
     def get_statistics(self):
@@ -128,16 +162,24 @@ class RolloutStorage:
         return trajectory_lengths.float().mean(), self.rewards.mean()
 
     def mini_batch_generator(self, num_mini_batches, num_epochs=8):
+        # 计算每个小批量的大小
         batch_size = self.num_envs * self.num_transitions_per_env
         mini_batch_size = batch_size // num_mini_batches
+
+        # 生成随机索引
         indices = torch.randperm(num_mini_batches * mini_batch_size, requires_grad=False, device=self.device)
 
+        # 展开观测值
         observations = self.observations.flatten(0, 1)
+
+        # 如果存在特权观测值，则使用特权观测值，否则使用普通观测值
         if self.privileged_observations is not None:
             critic_observations = self.privileged_observations.flatten(0, 1)
         else:
+            # 使用普通观测值作为critic观测值
             critic_observations = observations
 
+        # 展开动作、值、回报、旧动作对数概率、优势、旧均值和旧标准差
         actions = self.actions.flatten(0, 1)
         values = self.values.flatten(0, 1)
         returns = self.returns.flatten(0, 1)
@@ -146,12 +188,15 @@ class RolloutStorage:
         old_mu = self.mu.flatten(0, 1)
         old_sigma = self.sigma.flatten(0, 1)
 
+        # 训练多轮
         for epoch in range(num_epochs):
+            # 分割数据为小批量
             for i in range(num_mini_batches):
                 start = i * mini_batch_size
                 end = (i + 1) * mini_batch_size
                 batch_idx = indices[start:end]
 
+                # 提取当前小批量的数据
                 obs_batch = observations[batch_idx]
                 critic_observations_batch = critic_observations[batch_idx]
                 actions_batch = actions[batch_idx]
@@ -161,6 +206,8 @@ class RolloutStorage:
                 advantages_batch = advantages[batch_idx]
                 old_mu_batch = old_mu[batch_idx]
                 old_sigma_batch = old_sigma[batch_idx]
+
+                # 产出当前小批量的数据，以及一些额外的占位符
                 yield obs_batch, critic_observations_batch, actions_batch, target_values_batch, advantages_batch, returns_batch, old_actions_log_prob_batch, old_mu_batch, old_sigma_batch, (
                     None,
                     None,

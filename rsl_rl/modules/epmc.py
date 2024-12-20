@@ -6,10 +6,17 @@ from __future__ import annotations
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.distributions import Normal
+from ...tasks.utils.wrappers.rsl_rl import (
+    Z_settings,
+)
 
 
-class ActorCritic(nn.Module):
+
+
+
+class PMC(nn.Module):
     is_recurrent = False
 
     def __init__(
@@ -17,34 +24,19 @@ class ActorCritic(nn.Module):
         num_actor_obs,
         num_critic_obs,
         num_actions,
-        actor_hidden_dims=[256, 256, 256],
-        critic_hidden_dims=[256, 256, 256],
-        activation="elu",
-        init_noise_std=1.0,
+        activation="relu",
+        init_noise_std=-2.0,
         **kwargs,
     ):
+        # 检查是否有未使用的参数
         if kwargs:
             print(
                 "ActorCritic.__init__ got unexpected arguments, which will be ignored: "
                 + str([key for key in kwargs.keys()])
             )
         super().__init__()
-        activation = get_activation(activation)
-
-        mlp_input_dim_a = num_actor_obs
-        mlp_input_dim_c = num_critic_obs
-        # Policy
-        actor_layers = []
-        actor_layers.append(nn.Linear(mlp_input_dim_a, actor_hidden_dims[0]))
-        actor_layers.append(activation)
-        for layer_index in range(len(actor_hidden_dims)):
-            if layer_index == len(actor_hidden_dims) - 1:
-                actor_layers.append(nn.Linear(actor_hidden_dims[layer_index], num_actions))
-            else:
-                actor_layers.append(nn.Linear(actor_hidden_dims[layer_index], actor_hidden_dims[layer_index + 1]))
-                actor_layers.append(activation)
-        self.actor = nn.Sequential(*actor_layers)
-
+ 
+        #######################################Value#################################################################
         # Value function
         critic_layers = []
         critic_layers.append(nn.Linear(mlp_input_dim_c, critic_hidden_dims[0]))
@@ -57,12 +49,14 @@ class ActorCritic(nn.Module):
                 critic_layers.append(activation)
         self.critic = nn.Sequential(*critic_layers)
 
-        print(f"Actor MLP: {self.actor}")
+        print(f"Encoder MLP: {self.encoder},Codebook :{self.codebook},Decoder MLP: {self.decoder}")
         print(f"Critic MLP: {self.critic}")
 
         # Action noise
         self.std = nn.Parameter(init_noise_std * torch.ones(num_actions))
         self.distribution = None
+        self.z_e = None
+        self.z_q = None
         # disable args validation for speedup
         Normal.set_default_validate_args = False
 
@@ -83,7 +77,17 @@ class ActorCritic(nn.Module):
 
     def forward(self):
         raise NotImplementedError
+    @property
+    def vector_z_e(self):
+        return self.z_e
 
+    @property
+    def vector_z_q(self):
+        return self.z_q
+    @property
+    def encode_one_hot(self):
+        return self.one_hot
+    
     @property
     def action_mean(self):
         return self.distribution.mean
@@ -97,31 +101,43 @@ class ActorCritic(nn.Module):
         return self.distribution.entropy().sum(dim=-1)
 
     def update_distribution(self, observations):
-        # Check for NaN values in the observations tensor
-        if torch.isnan(observations).any():
-            print(f"NaN detected in observations tensor: {observations}")
-            raise ValueError("Observations contain NaN values")
-
-        # Compute the mean using the actor network
-        mean = self.actor(observations)
-
-        # Check for NaN values in the mean tensor
-        if torch.isnan(mean).any():
-            print(f"NaN detected in mean tensor: {mean}")
-            raise ValueError("Mean computed by actor contains NaN values")
-
-        # Update the distribution
-        self.distribution = Normal(mean, mean * 0.0 + self.std)
+        observations = self.rms(observations)
         
+        self.z_e = self.encoder(observations)
+        
+        # 将潜空间向量与codebook求最近距离，得到量化后的向量
+        flat_inputs = self.z_e.view(-1, self.z_length)
+        embeddings = self.get_codebook_embeddings()
+        nearest = torch.argmin(torch.cdist(flat_inputs, embeddings), dim=1)
+        self.z_q = self.codebook(nearest)
+        self.one_hot = F.one_hot(nearest, num_classes=self.num_embeddings).float()
+        
+        #将量化后的向量与观测值进行拼接
+        decoder_input = torch.cat((self.z_embd(self.z_e + (self.z_q - self.z_e.detach())),self.observation_embd(observations[:, :self.State_Dimentions])), dim=1)
+        
+        #计算输出动作
+        mean = self.decoder(decoder_input)
+        
+        #Update State Memory
+        #self.state_t_minus2 = self.state_t_minus1
+        #self.state_t_minus1 = self.state_t
+        
+        # 使用均值和标准差创建一个正态分布对象
+        # 其中标准差为均值乘以0（即不改变均值）再加上self.std
+        self.distribution = Normal(mean, mean * 0.0 + self.std)
+        return mean
     def act(self, observations, **kwargs):
         self.update_distribution(observations)
         return self.distribution.sample()
-
+    
     def get_actions_log_prob(self, actions):
         return self.distribution.log_prob(actions).sum(dim=-1)
+    
+    def get_codebook_embeddings(self):
+        return self.codebook.weight    
 
     def act_inference(self, observations):
-        actions_mean = self.actor(observations)
+        actions_mean = self.update_distribution(observations)
         return actions_mean
 
     def evaluate(self, critic_observations, **kwargs):
