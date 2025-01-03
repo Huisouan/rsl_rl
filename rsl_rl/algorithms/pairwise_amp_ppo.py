@@ -37,13 +37,16 @@ from rsl_rl.modules import ActorCritic
 from rsl_rl.storage import RolloutStorage
 from rsl_rl.storage.replay_buffer import ReplayBuffer
 
-class AMPPPO:
+class PAMPPPO:
     actor_critic: ActorCritic
     def __init__(self,
                  actor_critic,
                  discriminator,
                  amp_data,
                  amp_normalizer,
+                 min_std=None,
+                 device='cpu',
+                 
                  num_learning_epochs=1,
                  num_mini_batches=1,
                  clip_param=0.2,
@@ -56,9 +59,10 @@ class AMPPPO:
                  use_clipped_value_loss=True,
                  schedule="fixed",
                  desired_kl=0.01,
-                 device='cpu',
+
                  amp_replay_buffer_size=100000,
-                 min_std=None,
+
+                 
                  ):
 
         self.device = device
@@ -258,8 +262,8 @@ class AMPPPO:
                 nn.utils.clip_grad_norm_(self.actor_critic.parameters(), self.max_grad_norm)
                 self.optimizer.step()
 
-                if not self.actor_critic.fixed_std and self.min_std is not None:
-                    self.actor_critic.std.data = self.actor_critic.std.data.clamp(min=self.min_std)
+
+                self.actor_critic.std.data = self.actor_critic.std.data.clamp(min=self.min_std)
 
                 if self.amp_normalizer is not None:
                     self.amp_normalizer.update(policy_state.cpu().numpy())

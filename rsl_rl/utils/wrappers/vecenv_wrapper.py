@@ -20,18 +20,18 @@ class RslRlVecEnvWrapper(VecEnv):
             ValueError: When the environment is not an instance of :class:`ManagerBasedRLEnv` or :class:`DirectRLEnv`.
         """
         # initialize the wrapper
-        self.env = env
+        self.unwrapped = env
         # store information required by wrapper
-        self.num_envs = self.env.num_envs
-        self.device = self.env.device
-        self.max_episode_length = self.env.max_episode_length
-        self.num_actions = self.env.num_actions
-        self.num_obs = self.env.num_obs
+        self.num_envs = self.unwrapped.num_envs
+        self.device = self.unwrapped.device
+        self.max_episode_length = self.unwrapped.max_episode_length
+        self.num_actions = self.unwrapped.num_actions
+        self.num_obs = self.unwrapped.num_obs
         # -- privileged observations
-        if self.env.num_privileged_obs is not None:
-            self.num_privileged_obs = self.env.num_privileged_obs
+        if self.unwrapped.num_privileged_obs is not None:
+            self.num_privileged_obs = self.unwrapped.num_privileged_obs
         # reset at the start since the RSL-RL runner does not call reset
-        self.env.reset()
+        self.unwrapped.reset()
 
     def __str__(self):
         """Returns the wrapper name and the :attr:`env` representation string."""
@@ -56,13 +56,13 @@ class RslRlVecEnvWrapper(VecEnv):
 
     def get_observations(self) -> tuple[torch.Tensor, dict]:
         """Returns the current observations of the environment."""
-        obs_dict = self.env.get_observations()
+        obs_dict = self.unwrapped.get_observations()
         return obs_dict["policy"], {"observations": obs_dict}
 
     @property
     def episode_length_buf(self) -> torch.Tensor:
         """The episode length buffer."""
-        return self.env.episode_length_buf
+        return self.unwrapped.episode_length_buf
 
     @episode_length_buf.setter
     def episode_length_buf(self, value: torch.Tensor):
@@ -71,7 +71,7 @@ class RslRlVecEnvWrapper(VecEnv):
         Note:
             This is needed to perform random initialization of episode lengths in RSL-RL.
         """
-        self.env.episode_length_buf = value
+        self.unwrapped.episode_length_buf = value
 
     """
     Operations - MDP
@@ -79,13 +79,13 @@ class RslRlVecEnvWrapper(VecEnv):
 
     def reset(self) -> tuple[torch.Tensor, dict]:  # noqa: D102
         # reset the environment
-        obs_dict, _ = self.env.reset()
+        obs_dict, _ = self.unwrapped.reset()
         # return observations
         return obs_dict["policy"], {"observations": obs_dict}
 
     def step(self, actions: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, dict]:
         # record step information
-        obs_dict, rew, dones, extras = self.env.step(actions)
+        obs_dict, rew, dones, extras = self.unwrapped.step(actions)
         # move extra observations to the extras dict
         obs = obs_dict["policy"]
         extras["observations"] = obs_dict

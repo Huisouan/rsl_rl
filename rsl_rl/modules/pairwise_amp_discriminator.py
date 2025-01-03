@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.utils.data
 from torch import autograd
 import math
-from rsl_rl.utils import utils
+from rsl_rl.utils import amp_utils
 
 class LipschitzLinear(torch.nn.Module):
     def __init__(self, in_features, out_features):
@@ -66,10 +66,10 @@ class lipmlp(torch.nn.Module):
             x = self.relu(x)
         return self.layer_output(x)
 
-class AMPDiscriminator(nn.Module):
+class PAMPDiscriminator(nn.Module):
     def __init__(
             self, input_dim, amp_reward_coef, hidden_layer_sizes, device, task_reward_lerp=0.0):
-        super(AMPDiscriminator, self).__init__()
+        super(PAMPDiscriminator, self).__init__()
 
         self.device = device
         self.input_dim = input_dim
@@ -94,7 +94,7 @@ class AMPDiscriminator(nn.Module):
 
         self.task_reward_lerp = task_reward_lerp
 
-        self.reward_norm = utils.Normalizer(1)
+        self.reward_norm = amp_utils.Normalizer(1)
 
     def forward(self, x):
         h = self.trunk(x)

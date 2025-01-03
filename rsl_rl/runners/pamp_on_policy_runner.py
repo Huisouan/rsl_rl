@@ -1,6 +1,3 @@
-#  Copyright 2021 ETH Zurich, NVIDIA CORPORATION
-#  SPDX-License-Identifier: BSD-3-Clause
-
 from __future__ import annotations
 
 import os
@@ -9,37 +6,60 @@ import time
 import torch
 from collections import deque
 from torch.utils.tensorboard import SummaryWriter as TensorboardSummaryWriter
-import csv
-import rsl_rl
-from ..algorithms import PMCPPO as PPO
-from ..utils.wrappers.vecenv_wrapper import RslRlVecEnvWrapper
-from ..modules import ActorCritic, ActorCriticRecurrent, EmpiricalNormalization, PMC,CVQVAE
-from ..utils import store_code_state
 
-class PmcOnPolicyRunner:
-    """On-policy runner for training and evaluation."""
+
+import rsl_rl
+from ..env import RslRlVecEnvWrapper
+from ..modules import ActorCritic, ActorCriticRecurrent, EmpiricalNormalization
+from ..algorithms import AMPPPO
+from ..algorithms import PAMPDiscriminator
+from ..utils import store_code_state
+from ..utils.amp_utils import Normalizer
+from rl_lab.assets.loder_for_algs import AmpMotion
+
+class AmpOnPolicyRunner:
+    """AMP On-policy runner for training and evaluation."""
 
     def __init__(self, env: RslRlVecEnvWrapper, train_cfg, log_dir=None, device="cpu"):
         self.cfg = train_cfg
         self.alg_cfg = train_cfg["algorithm"]
         self.policy_cfg = train_cfg["policy"]
-        self.z_settings = train_cfg["z_settings"]
         self.device = device
         self.env = env
         obs, extras = self.env.get_observations()
         num_obs = obs.shape[1]
-        if "dataset" in extras:
-            num_dataset = extras["observations"]["dataset"].shape[1]
         if "critic" in extras["observations"]:
             num_critic_obs = extras["observations"]["critic"].shape[1]
         else:
             num_critic_obs = num_obs
         actor_critic_class = eval(self.policy_cfg.pop("class_name"))  # ActorCritic
-        actor_critic: ActorCritic | ActorCriticRecurrent | PMC | CVQVAE = actor_critic_class(
-            num_obs, num_critic_obs, self.env.num_actions,num_dataset,**self.z_settings,**self.policy_cfg
+        actor_critic: ActorCritic = actor_critic_class(
+            num_obs, num_critic_obs, self.env.unwrapped.num_actions, **self.policy_cfg
         ).to(self.device)
+        self.alg_cfg["amp_replay_buffer_size"] = self.env.unwrapped.cfg.amp_replay_buffer_size
+
+        amp_data = self.env.unwrapped.amp_loader
+        
+        amp_normalizer = Normalizer(amp_data.amp_obs_num)
+        discriminator = PAMPDiscriminator(
+            amp_data.amp_obs_num * 2,
+            self.cfg["amp_reward_coef"],
+            self.cfg["amp_discr_hidden_dims"],
+            device,
+            self.cfg["amp_task_reward_lerp"],
+        ).to(self.device)
+        
+        min_std = torch.tensor(self.cfg["min_normalized_std"], device=self.device) * (
+            torch.abs(
+                self.env.unwrapped.robot.soft_joint_pos_limits[0, :, 1]
+                - self.env.unwrapped.robot.soft_joint_pos_limits[0, :, 0]
+            )
+        )
+        
         alg_class = eval(self.alg_cfg.pop("class_name"))  # PPO
-        self.alg: PPO = alg_class(actor_critic, device=self.device, **self.alg_cfg)
+        self.alg: AMPPPO = alg_class(
+            actor_critic, discriminator, amp_data, amp_normalizer, min_std, device=self.device, **self.alg_cfg
+        )
         self.num_steps_per_env = self.cfg["num_steps_per_env"]
         self.save_interval = self.cfg["save_interval"]
         self.empirical_normalization = self.cfg["empirical_normalization"]
@@ -55,7 +75,7 @@ class PmcOnPolicyRunner:
             self.num_steps_per_env,
             [num_obs],
             [num_critic_obs],
-            [self.env.num_actions],
+            [self.env.unwrapped.num_actions],
         )
 
         # Log
@@ -74,12 +94,12 @@ class PmcOnPolicyRunner:
             self.logger_type = self.logger_type.lower()
 
             if self.logger_type == "neptune":
-                from rsl_rl.utils.neptune_utils import NeptuneSummaryWriter
+                from ..utils.neptune_utils import NeptuneSummaryWriter
 
                 self.writer = NeptuneSummaryWriter(log_dir=self.log_dir, flush_secs=10, cfg=self.cfg)
                 self.writer.log_config(self.env.cfg, self.cfg, self.alg_cfg, self.policy_cfg)
             elif self.logger_type == "wandb":
-                from rsl_rl.utils.wandb_utils import WandbSummaryWriter
+                from ..utils.wandb_utils import WandbSummaryWriter
 
                 self.writer = WandbSummaryWriter(log_dir=self.log_dir, flush_secs=10, cfg=self.cfg)
                 self.writer.log_config(self.env.cfg, self.cfg, self.alg_cfg, self.policy_cfg)
@@ -95,6 +115,9 @@ class PmcOnPolicyRunner:
         obs, extras = self.env.get_observations()
         critic_obs = extras["observations"].get("critic", obs)
         obs, critic_obs = obs.to(self.device), critic_obs.to(self.device)
+        amp_obs = self.env.unwrapped.get_amp_observations()
+        amp_obs = amp_obs.to(self.device)
+
         self.train_mode()  # switch to train mode (for dropout for example)
 
         ep_infos = []
@@ -105,15 +128,15 @@ class PmcOnPolicyRunner:
 
         start_iter = self.current_learning_iteration
         tot_iter = start_iter + num_learning_iterations
-        #建立csv文件记录数据
-        
         for it in range(start_iter, tot_iter):
             start = time.time()
             # Rollout
             with torch.inference_mode():
                 for i in range(self.num_steps_per_env):
-                    actions = self.alg.act(obs,self.env.unwrapped,critic_obs)
+                    actions = self.alg.act(obs, critic_obs, amp_obs)
                     obs, rewards, dones, infos = self.env.step(actions)
+                    reset_env_ids = infos["reset_env_ids"]
+                    terminal_amp_states = infos["terminal_amp_states"]
                     obs = self.obs_normalizer(obs)
                     if "critic" in infos["observations"]:
                         critic_obs = self.critic_obs_normalizer(infos["observations"]["critic"])
@@ -125,8 +148,17 @@ class PmcOnPolicyRunner:
                         rewards.to(self.device),
                         dones.to(self.device),
                     )
-                    self.alg.process_env_step(rewards, dones, infos)
-
+                    next_amp_obs = self.env.unwrapped.get_amp_observations()
+                    next_amp_obs = next_amp_obs.to(self.device)
+                    # Account for terminal states.
+                    next_amp_obs_with_term = torch.clone(next_amp_obs)
+                    next_amp_obs_with_term[reset_env_ids] = terminal_amp_states
+                    
+                    rewards = self.alg.discriminator.predict_amp_reward(
+                        amp_obs, next_amp_obs_with_term, rewards, normalizer=self.alg.amp_normalizer
+                    )[0]
+                    amp_obs = torch.clone(next_amp_obs)
+                    self.alg.process_env_step(rewards, dones, infos, next_amp_obs_with_term)
                     if self.log_dir is not None:
                         # Book keeping
                         # note: we changed logging to use "log" instead of "episode" to avoid confusion with
@@ -150,7 +182,14 @@ class PmcOnPolicyRunner:
                 start = stop
                 self.alg.compute_returns(critic_obs)
 
-            mean_value_loss, mean_surrogate_loss,vqvae_loss,perplexity_loss = self.alg.update(self.env.unwrapped)
+            (
+                mean_value_loss,
+                mean_surrogate_loss,
+                mean_amp_loss,
+                mean_grad_pen_loss,
+                mean_policy_pred,
+                mean_expert_pred,
+            ) = self.alg.update()
             stop = time.time()
             learn_time = stop - start
             self.current_learning_iteration = it
@@ -167,7 +206,7 @@ class PmcOnPolicyRunner:
                     for path in git_file_paths:
                         self.writer.save_file(path)
 
-        self.save(os.path.join(self.log_dir, f"model_{self.current_learning_iteration}.pt"))
+        self.save(os.path.join(self.log_dir, f"model_{self.current_learning_iteration + 1}.pt"))
 
     def log(self, locs: dict, width: int = 80, pad: int = 35):
         self.tot_timesteps += self.num_steps_per_env * self.env.num_envs
@@ -213,6 +252,8 @@ class PmcOnPolicyRunner:
                 self.writer.add_scalar(
                     "Train/mean_episode_length/time", statistics.mean(locs["lenbuffer"]), self.tot_time
                 )
+        self.writer.add_scalar("Loss/AMP", locs["mean_amp_loss"], locs["it"])
+        self.writer.add_scalar("Loss/AMP_grad", locs["mean_grad_pen_loss"], locs["it"])
 
         str = f" \033[1m Learning iteration {locs['it']}/{locs['tot_iter']} \033[0m "
 
@@ -221,15 +262,16 @@ class PmcOnPolicyRunner:
                 f"""{'#' * width}\n"""
                 f"""{str.center(width, ' ')}\n\n"""
                 f"""{'Computation:':>{pad}} {fps:.0f} steps/s (collection: {locs[
-                            'collection_time']:.3f}s, learning {locs['learn_time']}s)\n"""
-                f"""{'Value function loss:':>{pad}} {locs['mean_value_loss']}\n"""
-                f"""{'VQVAE loss:':>{pad}} {locs['vqvae_loss']}\n"""
-                f"""{'perplexity:':>{pad}} {locs['perplexity_loss']}\n"""
-                f"""{'Surrogate loss:':>{pad}} {locs['mean_surrogate_loss']}\n"""
-                f"""{'Mean action noise std:':>{pad}} {mean_std.item()}\n"""
-                f"""{'learning_rate:':>{pad}} {self.alg.learning_rate}\n"""
-                f"""{'Mean reward:':>{pad}} {statistics.mean(locs['rewbuffer'])}\n"""
-                f"""{'Mean episode length:':>{pad}} {statistics.mean(locs['lenbuffer'])}\n"""
+                            'collection_time']:.3f}s, learning {locs['learn_time']:.3f}s)\n"""
+                f"""{'Value function loss:':>{pad}} {locs['mean_value_loss']:.4f}\n"""
+                f"""{'Surrogate loss:':>{pad}} {locs['mean_surrogate_loss']:.4f}\n"""
+                f"""{'Mean action noise std:':>{pad}} {mean_std.item():.2f}\n"""
+                f"""{'Mean reward:':>{pad}} {statistics.mean(locs['rewbuffer']):.2f}\n"""
+                f"""{'Mean episode length:':>{pad}} {statistics.mean(locs['lenbuffer']):.2f}\n"""
+                f"""{'AMP loss:':>{pad}} {locs['mean_amp_loss']:.4f}\n"""
+                f"""{'AMP grad pen loss:':>{pad}} {locs['mean_grad_pen_loss']:.4f}\n"""
+                f"""{'AMP mean policy pred:':>{pad}} {locs['mean_policy_pred']:.4f}\n"""
+                f"""{'AMP mean expert pred:':>{pad}} {locs['mean_expert_pred']:.4f}\n"""
             )
             #   f"""{'Mean reward/step:':>{pad}} {locs['mean_reward']:.2f}\n"""
             #   f"""{'Mean episode length/episode:':>{pad}} {locs['mean_trajectory_length']:.2f}\n""")
@@ -263,6 +305,8 @@ class PmcOnPolicyRunner:
             "optimizer_state_dict": self.alg.optimizer.state_dict(),
             "iter": self.current_learning_iteration,
             "infos": infos,
+            "discriminator_state_dict": self.alg.discriminator.state_dict(),
+            "amp_normalizer": self.alg.amp_normalizer,
         }
         if self.empirical_normalization:
             saved_dict["obs_norm_state_dict"] = self.obs_normalizer.state_dict()
@@ -274,14 +318,31 @@ class PmcOnPolicyRunner:
             self.writer.save_model(path, self.current_learning_iteration)
 
     def load(self, path, load_optimizer=True):
+        # 加载模型和优化器的状态字典
         loaded_dict = torch.load(path)
+        
+        # 加载策略网络（actor_critic）的模型状态字典
         self.alg.actor_critic.load_state_dict(loaded_dict["model_state_dict"])
+        
+        # 如果启用了经验归一化，则加载观察值归一化器的状态字典
         if self.empirical_normalization:
             self.obs_normalizer.load_state_dict(loaded_dict["obs_norm_state_dict"])
             self.critic_obs_normalizer.load_state_dict(loaded_dict["critic_obs_norm_state_dict"])
+        
+        # 如果需要加载优化器，则加载优化器的状态字典
         if load_optimizer:
             self.alg.optimizer.load_state_dict(loaded_dict["optimizer_state_dict"])
+        
+        # 设置当前的学习迭代次数
         self.current_learning_iteration = loaded_dict["iter"]
+        
+        # 加载判别器（discriminator）的模型状态字典
+        self.alg.discriminator.load_state_dict(loaded_dict["discriminator_state_dict"])
+        
+        # 加载AMP归一化器
+        self.alg.amp_normalizer = loaded_dict["amp_normalizer"]
+        
+        # 返回加载的信息
         return loaded_dict["infos"]
 
     def get_inference_policy(self, device=None):
@@ -309,23 +370,3 @@ class PmcOnPolicyRunner:
 
     def add_git_repo_to_log(self, repo_file_path):
         self.git_status_repos.append(repo_file_path)
-
-
-    def open_csv(self):
-        # 确保日志目录存在
-        if not os.path.exists(self.log_dir):
-            os.makedirs(self.log_dir)
-
-        # 打开CSV文件
-        self.file = open(self.csv_file_path, mode='w', newline='')
-        self.csvwriter = csv.writer(self.file)
-
-    def write_csv_data(self, data):
-        if self.writer:
-            self.csvwriter.writerow(data)
-
-    def close_csv(self):
-        if self.file:
-            self.file.close()
-            self.file = None
-            self.csvwriterwriter = None
