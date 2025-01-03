@@ -9,9 +9,9 @@ from torch.utils.tensorboard import SummaryWriter as TensorboardSummaryWriter
 
 
 import rsl_rl
-from ..utils.wrappers.vecenv_wrapper import RslRlVecEnvWrapper
+from ..env import VecEnv
 from ..modules import ActorCritic, ActorCriticRecurrent, EmpiricalNormalization
-from ..algorithms import PAMPPPO
+from ..algorithms import AMPPPO
 from ..algorithms import PAMPDiscriminator
 from ..utils import store_code_state
 from ..utils.amp_utils import Normalizer
@@ -20,11 +20,10 @@ from rl_lab.assets.loder_for_algs import AmpMotion
 class AmpOnPolicyRunner:
     """AMP On-policy runner for training and evaluation."""
 
-    def __init__(self, env: RslRlVecEnvWrapper, train_cfg, log_dir=None, device="cpu"):
+    def __init__(self, env: VecEnv, train_cfg, log_dir=None, device="cpu"):
         self.cfg = train_cfg
         self.alg_cfg = train_cfg["algorithm"]
         self.policy_cfg = train_cfg["policy"]
-        self.amp_policy_cfg = train_cfg["amp_policy_cfg"]
         self.device = device
         self.env = env
         obs, extras = self.env.get_observations()
@@ -35,38 +34,31 @@ class AmpOnPolicyRunner:
             num_critic_obs = num_obs
         actor_critic_class = eval(self.policy_cfg.pop("class_name"))  # ActorCritic
         actor_critic: ActorCritic = actor_critic_class(
-            num_obs, num_critic_obs, self.env.num_actions, **self.policy_cfg
+            num_obs, num_critic_obs, self.env.unwrapped.num_actions, **self.policy_cfg
         ).to(self.device)
-        self.alg_cfg["amp_replay_buffer_size"] = self.env.unwrapped.amp_cfg["amp_replay_buffer_size"]
+        self.alg_cfg["amp_replay_buffer_size"] = self.env.unwrapped.cfg.amp_replay_buffer_size
 
         amp_data = self.env.unwrapped.amp_loader
         
-        amp_normalizer = Normalizer(amp_data.observation_dim)
+        amp_normalizer = Normalizer(amp_data.amp_obs_num)
         discriminator = PAMPDiscriminator(
-            amp_data.observation_dim * 2,
-            self.amp_policy_cfg["amp_reward_coef"],
-            self.amp_policy_cfg["amp_discr_hidden_dims"],
+            amp_data.amp_obs_num * 2,
+            self.cfg["amp_reward_coef"],
+            self.cfg["amp_discr_hidden_dims"],
             device,
-            self.amp_policy_cfg["amp_task_reward_lerp"],
+            self.cfg["amp_task_reward_lerp"],
         ).to(self.device)
         
-        min_std = torch.tensor(self.amp_policy_cfg["min_normalized_std"], device=self.device) * (
+        min_std = torch.tensor(self.cfg["min_normalized_std"], device=self.device) * (
             torch.abs(
-                self.env.unwrapped.robot_dof_limits[1]
-                - self.env.unwrapped.robot_dof_limits[0]
+                self.env.unwrapped.robot.soft_joint_pos_limits[0, :, 1]
+                - self.env.unwrapped.robot.soft_joint_pos_limits[0, :, 0]
             )
         )
         
         alg_class = eval(self.alg_cfg.pop("class_name"))  # PPO
-        self.alg: PAMPPPO = alg_class(
-            actor_critic, 
-            discriminator, 
-            amp_data, 
-            amp_normalizer, 
-            min_std, 
-            device=self.device, 
-            
-            **self.alg_cfg
+        self.alg: AMPPPO = alg_class(
+            actor_critic, discriminator, amp_data, amp_normalizer, min_std, device=self.device, **self.alg_cfg
         )
         self.num_steps_per_env = self.cfg["num_steps_per_env"]
         self.save_interval = self.cfg["save_interval"]
