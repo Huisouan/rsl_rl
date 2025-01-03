@@ -11,7 +11,7 @@ from torch.utils.tensorboard import SummaryWriter as TensorboardSummaryWriter
 import rsl_rl
 from ..env import VecEnv
 from ..modules import ActorCritic, ActorCriticRecurrent, EmpiricalNormalization
-from ..algorithms import AMPPPO
+from ..algorithms import PAMPPPO
 from ..algorithms import PAMPDiscriminator
 from ..utils import store_code_state
 from ..utils.amp_utils import Normalizer
@@ -51,13 +51,13 @@ class PAmpOnPolicyRunnerl:
         
         min_std = torch.tensor(self.cfg["min_normalized_std"], device=self.device) * (
             torch.abs(
-                self.env.unwrapped.robot.soft_joint_pos_limits[0, :, 1]
-                - self.env.unwrapped.robot.soft_joint_pos_limits[0, :, 0]
+                self.env.unwrapped.robot.data.soft_joint_pos_limits[0, :, 1]
+                - self.env.unwrapped.robot.data.soft_joint_pos_limits[0, :, 0]
             )
         )
         
         alg_class = eval(self.alg_cfg.pop("class_name"))  # PPO
-        self.alg: AMPPPO = alg_class(
+        self.alg: PAMPPPO = alg_class(
             actor_critic, discriminator, amp_data, amp_normalizer, min_std, device=self.device, **self.alg_cfg
         )
         self.num_steps_per_env = self.cfg["num_steps_per_env"]
