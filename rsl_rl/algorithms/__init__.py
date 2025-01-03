@@ -7,7 +7,7 @@ from .pmcppo import PMCPPO
 from .epmcppo import EPMCPPO
 from .aseppo import ASEPPO
 from .aseppov1 import ASEV1
-from .amp_discriminator import AMPDiscriminator
+from ..modules.amp_discriminator import AMPDiscriminator
 from .amp_ppo import AMPPPO
 from .cvqvaeppo import CVQVAEPPO
 from .ppo import PPO

@@ -35,7 +35,7 @@ import torch.optim as optim
 from ..modules import HIMActorCritic
 from ..storage import HIMRolloutStorage,RolloutStorage
 from ..storage.replay_buffer import ReplayBuffer
-from .amp_discriminator import AMPDiscriminator
+from ..modules.amp_discriminator import AMPDiscriminator
 class HimmixPPO:
     actor_critic: HIMActorCritic
 
