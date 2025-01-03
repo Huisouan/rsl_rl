@@ -17,7 +17,7 @@ from ..utils import store_code_state
 from ..utils.amp_utils import Normalizer
 from rl_lab.assets.loder_for_algs import AmpMotion
 
-class AmpOnPolicyRunner:
+class PAmpOnPolicyRunnerl:
     """AMP On-policy runner for training and evaluation."""
 
     def __init__(self, env: VecEnv, train_cfg, log_dir=None, device="cpu"):
