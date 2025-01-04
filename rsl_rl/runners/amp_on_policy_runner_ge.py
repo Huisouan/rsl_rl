@@ -11,13 +11,13 @@ from torch.utils.tensorboard import SummaryWriter as TensorboardSummaryWriter
 import rsl_rl
 from ..utils.wrappers.vecenv_wrapper import RslRlVecEnvWrapper
 from ..modules import ActorCritic, ActorCriticRecurrent, EmpiricalNormalization
-from ..algorithms import PAMPPPO
-from ..algorithms import PAMPDiscriminator
+from ..algorithms import AMPPPO
+from ..algorithms import AMPDiscriminator
 from ..utils import store_code_state
 from ..utils.amp_utils import Normalizer
 from rl_lab.assets.loder_for_algs import AmpMotion
 
-class PAmpOnPolicyRunnerg:
+class AmpOnPolicyRunnerg:
     """AMP On-policy runner for training and evaluation."""
 
     def __init__(self, env: RslRlVecEnvWrapper, train_cfg, log_dir=None, device="cpu"):
@@ -42,7 +42,7 @@ class PAmpOnPolicyRunnerg:
         amp_data = self.env.unwrapped.amp_loader
         
         amp_normalizer = Normalizer(amp_data.observation_dim)
-        discriminator = PAMPDiscriminator(
+        discriminator = AMPDiscriminator(
             amp_data.observation_dim * 2,
             self.amp_policy_cfg["amp_reward_coef"],
             self.amp_policy_cfg["amp_discr_hidden_dims"],
@@ -58,14 +58,13 @@ class PAmpOnPolicyRunnerg:
         )
         
         alg_class = eval(self.alg_cfg.pop("class_name"))  # PPO
-        self.alg: PAMPPPO = alg_class(
+        self.alg: AMPPPO = alg_class(
             actor_critic, 
             discriminator, 
             amp_data, 
             amp_normalizer, 
             min_std, 
             device=self.device, 
-            
             **self.alg_cfg
         )
         self.num_steps_per_env = self.cfg["num_steps_per_env"]

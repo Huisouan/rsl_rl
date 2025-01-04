@@ -5,7 +5,7 @@
 
 from .pmc_on_policy_runner import PmcOnPolicyRunner
 from .amp_on_policy_runner_lab import AmpOnPolicyRunner
-from .amp_on_policy_runner_ge import PAmpOnPolicyRunnerg
+from .amp_on_policy_runner_ge import AmpOnPolicyRunnerg
 from .cvqvae_on_policy_runner import CvqvaeOnPolicyRunner
 from .ase_on_policy_runner import ASEOnPolicyRunner
 from .him_on_policy_runner import HIMOnPolicyRunner
@@ -17,7 +17,7 @@ __all__ = [
         "OnPolicyRunner",
         "PmcOnPolicyRunner",
         "AmpOnPolicyRunner",
-        "PAmpOnPolicyRunnerg",
+        "AmpOnPolicyRunnerg",
         "CvqvaeOnPolicyRunner",
         "ASEOnPolicyRunner",
         "HIMOnPolicyRunner",
