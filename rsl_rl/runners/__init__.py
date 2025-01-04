@@ -13,6 +13,7 @@ from .ase_on_policy_runnerv1 import ASE1OnPolicyRunner
 from .on_policy_runner import OnPolicyRunner
 from .pamp_on_policy_runner_lab import PAmpOnPolicyRunnerl
 from .pamp_on_policy_runner import PAmpOnPolicyRunner
+from .ase_on_policy_runnerv1g import ASE1OnPolicyRunnerg
 __all__ = [
         "OnPolicyRunner",
         "PmcOnPolicyRunner",
@@ -22,6 +23,7 @@ __all__ = [
         "ASEOnPolicyRunner",
         "HIMOnPolicyRunner",
         "ASE1OnPolicyRunner",
+        "ASE1OnPolicyRunnerg",
         "PAmpOnPolicyRunner",
         "PAmpOnPolicyRunnerl",
            ]
