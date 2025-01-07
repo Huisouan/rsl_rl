@@ -32,19 +32,19 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
-from ..modules import ActorCritic
-from ..storage import RolloutStorage
-from ..storage.replay_buffer import ReplayBuffer
-from ..modules.amp_discriminator import AMPDiscriminator
-from rl_lab.assets.loder_for_algs import AmpMotion
+from rsl_rl.modules import ActorCritic
+from rsl_rl.storage import RolloutStorage
+from rsl_rl.storage.replay_buffer import ReplayBuffer
+
+
 class AMPPPO:
     actor_critic: ActorCritic
 
     def __init__(
         self,
         actor_critic,
-        discriminator:AMPDiscriminator,
-        amp_data:AmpMotion,
+        discriminator,
+        amp_data,
         amp_normalizer,
         min_std=None,
         amp_replay_buffer_size=100000,
@@ -142,9 +142,7 @@ class AMPPPO:
         # Record the transition
         self.storage.add_transitions(self.transition)
         self.transition.clear()
-        
         self.amp_transition.clear()
-        
         self.actor_critic.reset(dones)
 
     def compute_returns(self, last_critic_obs):
@@ -232,17 +230,8 @@ class AMPPPO:
                     -self.clip_param, self.clip_param
                 )
                 value_losses = (value_batch - returns_batch).pow(2)
-                value_losses = torch.clamp(value_losses, -1e5, 1e5)
-                
                 value_losses_clipped = (value_clipped - returns_batch).pow(2)
-                
-                value_losses_clipped = torch.clamp(value_losses_clipped, -1e5, 1e5)
-                
                 value_loss = torch.max(value_losses, value_losses_clipped).mean()
-
-                # Print max and min of value_loss
-
-
             else:
                 value_loss = (returns_batch - value_batch).pow(2).mean()
 
@@ -265,7 +254,6 @@ class AMPPPO:
             policy_loss = torch.nn.MSELoss()(policy_d, -1 * torch.ones(policy_d.size(), device=self.device))
             amp_loss = 0.5 * (expert_loss + policy_loss)
             grad_pen_loss = self.discriminator.compute_grad_pen(expert_state, expert_next_state, lambda_=10)
-            # Check for NaN values in losses
 
             # Compute total loss.
             loss = (

@@ -15,7 +15,7 @@ from ..algorithms import AMPPPO
 from ..algorithms import AMPDiscriminator
 from ..utils import store_code_state
 from ..utils.amp_utils import Normalizer
-from rl_lab.assets.loder_for_algs import AmpMotion
+
 
 class AmpOnPolicyRunner:
     """AMP On-policy runner for training and evaluation."""
@@ -51,8 +51,8 @@ class AmpOnPolicyRunner:
         
         min_std = torch.tensor(self.cfg["min_normalized_std"], device=self.device) * (
             torch.abs(
-                self.env.unwrapped.robot.soft_joint_pos_limits[0, :, 1]
-                - self.env.unwrapped.robot.soft_joint_pos_limits[0, :, 0]
+                self.env.unwrapped.robot.data.soft_joint_pos_limits[0, :, 1]
+                - self.env.unwrapped.robot.data.soft_joint_pos_limits[0, :, 0]
             )
         )
         
