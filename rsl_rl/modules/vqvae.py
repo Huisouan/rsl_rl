@@ -93,11 +93,11 @@ class FSQ(nn.Module):
         encoder_hidden_dims=[256, 256],
         decoder_hidden_dims=[256, 256],
         critic_hidden_dims=[256, 256],
+        fsqlevels = [8,6,5],
         activation="elu",
         value_activation="tanh",
         init_noise_std=1,
         State_Dimentions=45 * 3,
-        rms_momentum=0.0001,
         **kwargs,
     ):
         if kwargs:
@@ -126,7 +126,7 @@ class FSQ(nn.Module):
             hidden_dims=encoder_hidden_dims,
             activation=self.activation,
         )
-        
+        self.quantize_t = FSQ(levels=fsqlevels)
         # VQVAE Decoder
         self.decoder = VQVAEDecoder(
             input_dim=self.z_length,
