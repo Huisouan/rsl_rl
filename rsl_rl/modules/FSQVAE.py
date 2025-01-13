@@ -8,6 +8,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.distributions import Normal
 from torch.nn import RMSNorm
+from vector_quantize_pytorch import FSQ
 from rsl_rl.utils.wrappers import (
     Z_settings,
 )
@@ -49,6 +50,7 @@ class VQVAEDecoder(nn.Module):
         state_dimensions,
         bot_neck_prop_embed_size,
         bot_neck_z_embed_size,
+        
     ):
         super().__init__()
         self.activation = activation
@@ -72,16 +74,14 @@ class VQVAEDecoder(nn.Module):
         decoder_layers.append(nn.Linear(hidden_dims[-1], output_dim))
         
         self.decoder = nn.Sequential(*decoder_layers)
-
-    def forward(self, z_e, z_q, observations):
-        z_embedded = self.z_embd(z_e + (z_q - z_e.detach()))
-        observation_embd = self.observation_embd(observations[:, :self.state_dimensions])
+    def forward(self, z_embedded, observations):
+        observation_embd = self.observation_embd(observations)
         decoder_input = torch.cat((z_embedded, observation_embd), dim=1)
         mean = self.decoder(decoder_input)
         return mean
 
 
-class FSQ(nn.Module):
+class FSQVAE(nn.Module):
     is_recurrent = False
 
     def __init__(
@@ -90,14 +90,15 @@ class FSQ(nn.Module):
         num_critic_obs,
         num_actions,
         num_dataset,
-        encoder_hidden_dims=[256, 256],
+        encoder_hidden_dims=[512, 256],
         decoder_hidden_dims=[256, 256],
         critic_hidden_dims=[256, 256],
         fsqlevels = [8,6,5],
+        z_length = 32,
         activation="elu",
         value_activation="tanh",
         init_noise_std=1,
-        State_Dimentions=45 * 3,
+        One_step_obs=45,
         **kwargs,
     ):
         if kwargs:
@@ -112,12 +113,8 @@ class FSQ(nn.Module):
         num_actor_obs = num_actor_obs * 3 + num_dataset
         
         self.input_init = False
-        self.State_Dimentions = State_Dimentions
-        
-        # RMS
-        rms_layers = []
-        rms_layers.append(RMSNorm(num_actor_obs, eps=1e-6))
-        self.rms = nn.Sequential(*rms_layers)
+        self.One_step_obs = One_step_obs
+        self.z_length = z_length
 
         # VQVAE Encoder
         self.encoder = VQVAEEncoder(
@@ -133,7 +130,7 @@ class FSQ(nn.Module):
             output_dim=num_actions,
             hidden_dims=decoder_hidden_dims,
             activation=self.activation,
-            state_dimensions=self.State_Dimentions,
+            state_dimensions=self.One_step_obs,
         )
         
         # Value function
@@ -158,6 +155,16 @@ class FSQ(nn.Module):
         print(f"Decoder: {self.decoder}")
         print(f"Critic: {self.critic}")
 
+    def encode(self,input):
+        logits = self.encoder(input)
+        quant_t, id_t = self.quantize_t(logits)
+        return quant_t, id_t        
+
+    def decode(self,z_embedded, observations):
+        mean = self.decoder.forward(self, z_embedded, observations)
+        return mean
+
+
     @staticmethod
     def init_weights(sequential, scales):
         [
@@ -168,8 +175,13 @@ class FSQ(nn.Module):
     def reset(self, dones=None):
         pass
 
-    def forward(self):
-        raise NotImplementedError
+    def forward(self,input,return_id=True):
+        quant_t, diff, id_t, = self.encode(input)
+        dec = self.decoder(quant_t,input[:,self.One_step_obs])
+        if return_id:
+            return dec, diff, id_t
+        return dec, diff        
+        
 
     @property
     def vector_z_e(self):
@@ -178,10 +190,6 @@ class FSQ(nn.Module):
     @property
     def vector_z_q(self):
         return self.z_q
-
-    @property
-    def encode_one_hot(self):
-        return self.one_hot
     
     @property
     def action_mean(self):
@@ -196,12 +204,9 @@ class FSQ(nn.Module):
         return self.distribution.entropy().sum(dim=-1)
 
     def update_distribution(self, observations):
-        observations = self.rms(observations)
+        quant_t, id_t, = self.encode(observations)
         
-        self.z_e, self.z_q, self.one_hot = self.encoder(observations)
-        
-        mean = self.decoder(self.z_e, self.z_q, observations)
-        
+        mean = self.decoder(quant_t,observations[:,self.One_step_obs])        
         self.distribution = Normal(mean, self.std)
         return mean
 
