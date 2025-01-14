@@ -13,9 +13,11 @@ from .cvqvae import CVQVAE
 from .him_actor_critic import HIMActorCritic 
 from .him_estimator import HIMEstimator  
 from .pairwise_amp_discriminator import PAMPDiscriminator
+from .FSQVAE import FSQVAE
+
 
 __all__ = ["ActorCritic", "ActorCriticRecurrent",
-           "EmpiricalNormalization", "PMC","CVQVAE"
+           "EmpiricalNormalization", "PMC","CVQVAE","FSQVAE",
            "ASEagent","AMPagent","ASEV1",
            "HIMActorCritic","HIMEstimator",
            "PAMPDiscriminator",
