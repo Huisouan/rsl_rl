@@ -13,9 +13,6 @@ from rsl_rl.utils.wrappers import (
     Z_settings,
 )
 
-
-
-
 class PMC(nn.Module):
     is_recurrent = False
 
@@ -57,10 +54,6 @@ class PMC(nn.Module):
         
         #Decoder 
         mlp_input_dim_c = num_critic_obs
-        #######################################RMS#################################################################
-        rms_layers = []
-        rms_layers.append(RMSNorm(num_actor_obs, eps=1e-6))
-        self.rms = nn.Sequential(*rms_layers)
 
         #######################################Actor#################################################################
         #VQVAE Encoder
@@ -139,8 +132,6 @@ class PMC(nn.Module):
         # disable args validation for speedup
         Normal.set_default_validate_args = False
         
-        
-        print(f"RMS: {self.rms}")
         print(f"Encoder : {self.encoder}")
         print(f"Codebook: {self.codebook}")
         print(f"Observation Embedding: {self.observation_embd}")
